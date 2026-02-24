@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Environment variables (keep secrets safe!)
+.env
+
+# Database & local storage
+stats.db
+*.db
+
+# ChromaDB vector store (large, regenerated from resumes)
+chroma_db/
+
+# Uploaded resumes / static files
+static/
+
+# Streamlit cache
+.streamlit/secrets.toml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

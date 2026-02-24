@@ -1,0 +1,12 @@
+streamlit
+langchain
+langchain-community
+langchain-huggingface
+langchain-chroma
+langchain-groq
+python-dotenv
+pypdf
+docx2txt
+pymupdf
+plotly
+pandas
