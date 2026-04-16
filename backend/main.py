@@ -8,7 +8,7 @@ from typing import Optional
 from datetime import datetime
 
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -63,7 +63,7 @@ def get_models():
 
 # ── DB Helpers ─────────────────────────────────────────────────────────────────
 def init_db():
-    conn = sqlite3.connect(STATS_DB)
+    conn = sqlite3.connect(STATS_DB, timeout=30.0)
     cur  = conn.cursor()
     cur.execute('''
         CREATE TABLE IF NOT EXISTS candidate_metadata (
@@ -101,7 +101,7 @@ def init_db():
     conn.close()
 
 def get_candidates_list() -> list:
-    conn = sqlite3.connect(STATS_DB)
+    conn = sqlite3.connect(STATS_DB, timeout=30.0)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     try:
@@ -113,7 +113,7 @@ def get_candidates_list() -> list:
     return rows
 
 def log_candidate(data: dict):
-    conn = sqlite3.connect(STATS_DB)
+    conn = sqlite3.connect(STATS_DB, timeout=30.0)
     cur  = conn.cursor()
     
     cur.execute("PRAGMA table_info(candidate_metadata)")
@@ -162,7 +162,7 @@ class CustomColumn(BaseModel):
 
 @app.post("/api/columns")
 def add_column(col: CustomColumn):
-    conn = sqlite3.connect(STATS_DB)
+    conn = sqlite3.connect(STATS_DB, timeout=30.0)
     cur = conn.cursor()
     clean_key = re.sub(r'[^a-zA-Z0-9_]', '', col.col_key.replace(' ', '_')).lower()
     
@@ -185,7 +185,7 @@ def add_column(col: CustomColumn):
 
 @app.get("/api/columns")
 def get_columns():
-    conn = sqlite3.connect(STATS_DB)
+    conn = sqlite3.connect(STATS_DB, timeout=30.0)
     cur = conn.cursor()
     cur.execute("SELECT col_key, col_label FROM custom_columns")
     customs = [{"col_key": row[0], "col_label": row[1]} for row in cur.fetchall()]
@@ -208,7 +208,7 @@ def get_columns():
 
 @app.delete("/api/columns/{col_key}")
 def delete_column(col_key: str):
-    conn = sqlite3.connect(STATS_DB)
+    conn = sqlite3.connect(STATS_DB, timeout=30.0)
     cur = conn.cursor()
     try:
         cur.execute("DELETE FROM custom_columns WHERE col_key=?", (col_key,))
@@ -226,7 +226,7 @@ def delete_column(col_key: str):
 @app.put("/api/candidates/{candidate_id}")
 async def update_candidate(candidate_id: int, request: Request):
     body = await request.json()
-    conn = sqlite3.connect(STATS_DB)
+    conn = sqlite3.connect(STATS_DB, timeout=30.0)
     cur  = conn.cursor()
     cur.execute("PRAGMA table_info(candidate_metadata)")
     allowed_cols = [c[1] for c in cur.fetchall()]
@@ -246,7 +246,7 @@ async def update_candidate(candidate_id: int, request: Request):
 
 @app.delete("/api/candidates/{candidate_id}")
 def delete_candidate(candidate_id: int):
-    conn = sqlite3.connect(STATS_DB)
+    conn = sqlite3.connect(STATS_DB, timeout=30.0)
     cur  = conn.cursor()
     cur.execute("DELETE FROM candidate_metadata WHERE id=?", (candidate_id,))
     conn.commit()
@@ -286,17 +286,9 @@ Resume Text:
 JSON:"""
 
 
-@app.post("/api/upload")
-async def upload_resume(file: UploadFile = File(...)):
+def process_resume(safe_name: str, path: str):
     _, llm = get_models()
     embeddings, _ = get_models()
-
-    # Save file
-    safe_name = file.filename
-    path = os.path.join(UPLOAD_DIR, safe_name)
-    with open(path, "wb") as f:
-        content = await file.read()
-        f.write(content)
 
     # Load document
     try:
@@ -307,12 +299,14 @@ async def upload_resume(file: UploadFile = File(...)):
         docs = loader.load()
         text = "\n".join([d.page_content for d in docs])
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not read file: {e}")
+        data = {"filename": safe_name, "full_name": f"Error loading file: {safe_name}"}
+        log_candidate(data)
+        return
 
     # LLM extraction
     try:
         # Fetch custom columns for the prompt
-        conn = sqlite3.connect(STATS_DB)
+        conn = sqlite3.connect(STATS_DB, timeout=30.0)
         cur = conn.cursor()
         cur.execute("SELECT col_key, description FROM custom_columns")
         custom_cols = cur.fetchall()
@@ -339,7 +333,7 @@ async def upload_resume(file: UploadFile = File(...)):
         data['filename'] = safe_name
         log_candidate(data)
     except Exception as e:
-        data = {"filename": safe_name, "full_name": safe_name}
+        data = {"filename": safe_name, "full_name": f"Processing Error: {safe_name}"}
         log_candidate(data)
 
     # Add to ChromaDB
@@ -352,7 +346,23 @@ async def upload_resume(file: UploadFile = File(...)):
     except Exception:
         pass
 
-    return {"status": "ok", "data": data}
+
+@app.post("/api/upload")
+async def upload_resume(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    # Save file
+    safe_name = file.filename
+    path = os.path.join(UPLOAD_DIR, safe_name)
+    with open(path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    # Placeholder while processing in background
+    log_candidate({"filename": safe_name, "full_name": f"⏳ Processing: {safe_name}"})
+    
+    # Process asynchronously
+    background_tasks.add_task(process_resume, safe_name, path)
+
+    return {"status": "processing", "message": "Resume uploaded and is processing in the background."}
 
 # ── Chat ──────────────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
@@ -529,7 +539,7 @@ Answer:""",
 # ── Reset ──────────────────────────────────────────────────────────────────────
 @app.post("/api/reset")
 def reset_all():
-    conn = sqlite3.connect(STATS_DB)
+    conn = sqlite3.connect(STATS_DB, timeout=30.0)
     conn.execute("DELETE FROM candidate_metadata")
     conn.commit()
     conn.close()
