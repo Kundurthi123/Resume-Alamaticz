@@ -1,14 +1,14 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.3.1+cpu
 langchain
 langchain-community
 langchain-huggingface
 langchain-chroma
 langchain-groq
 python-dotenv
-pypdf
 docx2txt
 pymupdf
-plotly
-pandas
 fastapi
 uvicorn
 python-multipart

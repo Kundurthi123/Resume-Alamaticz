@@ -7,7 +7,7 @@ import gc
 from typing import Optional
 from datetime import datetime
 
-import pandas as pd
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -21,7 +21,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
-from langchain_classic.chains import RetrievalQA
+from langchain.chains import RetrievalQA
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import PromptTemplate
 
@@ -100,16 +100,17 @@ def init_db():
     conn.commit()
     conn.close()
 
-def get_candidates_df() -> pd.DataFrame:
+def get_candidates_list() -> list:
     conn = sqlite3.connect(STATS_DB)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
     try:
-        df = pd.read_sql_query(
-            "SELECT * FROM candidate_metadata ORDER BY timestamp DESC", conn
-        )
+        cur.execute("SELECT * FROM candidate_metadata ORDER BY timestamp DESC")
+        rows = [dict(r) for r in cur.fetchall()]
     except Exception:
-        df = pd.DataFrame()
+        rows = []
     conn.close()
-    return df
+    return rows
 
 def log_candidate(data: dict):
     conn = sqlite3.connect(STATS_DB)
@@ -146,11 +147,13 @@ def health():
 # ── Candidates ─────────────────────────────────────────────────────────────────
 @app.get("/api/candidates")
 def list_candidates():
-    df = get_candidates_df()
-    if df.empty:
-        return []
-    df = df.fillna("")
-    return df.to_dict(orient="records")
+    rows = get_candidates_list()
+    # Replace None values with empty string
+    for row in rows:
+        for k, v in row.items():
+            if v is None:
+                row[k] = ""
+    return rows
 
 class CustomColumn(BaseModel):
     col_key: str
@@ -374,18 +377,23 @@ def _is_conversational(msg: str) -> bool:
         return True
     return False
 
-def _df_to_rows(df: pd.DataFrame, names: list) -> list:
-    """Return exact DB rows for the given candidate names."""
+def _find_matching_rows(rows: list, names: list) -> list:
+    """Return matching exact DB rows for the given candidate names."""
     lower_names = [n.strip().lower() for n in names]
-    matched = df[df['full_name'].str.lower().str.strip().isin(lower_names)]
-    if matched.empty:
+    
+    # Try exact match first
+    matched = [r for r in rows if r.get('full_name', '').strip().lower() in lower_names]
+    
+    if not matched:
         # Try partial match
-        mask = df['full_name'].str.lower().apply(
-            lambda x: any(ln in x or x in ln for ln in lower_names)
-        )
-        matched = df[mask]
+        matched = []
+        for r in rows:
+            fn_lower = r.get('full_name', '').strip().lower()
+            if any((ln in fn_lower or fn_lower in ln) and ln != '' for ln in lower_names):
+                matched.append(r)
+                
     records = []
-    for _, r in matched.iterrows():
+    for r in matched:
         records.append({
             "name":             r.get("full_name", ""),
             "total_experience": r.get("total_experience", 0),
@@ -415,15 +423,19 @@ def chat(body: ChatRequest):
         return {"type": "text", "answer": resp.content}
 
     # ── Route 2: Structured (SQLite) — always try this first ─────────────────
-    df = get_candidates_df()
-    if not df.empty:
-        for col in ['total_experience', 'pega_experience']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    rows = get_candidates_list()
+    if rows:
+        for r in rows:
+            for col in ['total_experience', 'pega_experience']:
+                if col in r:
+                    try:
+                        r[col] = float(r[col]) if str(r[col]).strip() != "" else 0
+                    except:
+                        r[col] = 0
 
         # Build a compact summary of each candidate for the LLM
         candidate_lines = []
-        for _, r in df.iterrows():
+        for r in rows:
             line = (
                 f"Name: {r.get('full_name','?')} | "
                 f"Total Exp: {r.get('total_experience',0)} yrs | "
@@ -477,9 +489,9 @@ Respond with ONLY the MATCH_RESULT line, nothing else."""
                         names = result.get("matched_names", [])
                         intro = result.get("intro", "Here are the matching candidates:")
                         if names:
-                            rows = _df_to_rows(df, names)
-                            if rows:
-                                return {"type": "table", "answer": intro, "rows": rows}
+                            matched_rows = _find_matching_rows(rows, names)
+                            if matched_rows:
+                                return {"type": "table", "answer": intro, "rows": matched_rows}
                         # No matches found
                         return {"type": "text", "answer": "No candidates match your query. Try a different filter."}
         except Exception:
