@@ -6,6 +6,26 @@ echo ================================================
 :: Set NODE path
 set "PATH=%PATH%;C:\Program Files\nodejs"
 
+:: Check and install frontend modules if they don't exist
+if not exist "%~dp0frontend\node_modules\" (
+    echo ================================================
+    echo  First-time setup: Installing Frontend packages
+    echo ================================================
+    cd "%~dp0frontend"
+    call npm install
+    cd "%~dp0"
+)
+
+:: Check and install backend environment if it doesn't exist
+if not exist "%~dp0.venv\" (
+    echo ================================================
+    echo  First-time setup: Creating Backend environment
+    echo ================================================
+    python -m venv .venv
+    call "%~dp0.venv\Scripts\activate.bat"
+    pip install -r requirements.txt
+)
+
 :: Start FastAPI backend in its own window
 echo Starting FastAPI backend on port 8000...
 Start "Hire AI - Backend" /D "%~dp0" .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --port 8000
