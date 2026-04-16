@@ -4,7 +4,7 @@ import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
     ResponsiveContainer, Cell
 } from 'recharts'
-import { Users, Clock, Download } from 'lucide-react'
+import { Users, Clock, Download, Plus } from 'lucide-react'
 import { exportToExcel, formatCandidatesForExcel } from '../utils/excelUtils'
 
 function SkillBadges({ skills }) {
@@ -27,16 +27,47 @@ const COLORS = ['#FB8500', '#FFB703', '#219EBC', '#8ECAE6', '#023047']
 
 export default function DashboardPage() {
     const [candidates, setCandidates] = useState([])
+    const [columns, setColumns] = useState([])
     const [loading, setLoading] = useState(true)
     const [filterType, setFilterType] = useState('all') // 'all' | 'immediate'
     const summaryRef = useRef(null)
 
+    const [showAddCol, setShowAddCol] = useState(false)
+    const [newColLabel, setNewColLabel] = useState('')
+    const [newColDesc, setNewColDesc] = useState('')
+    const [addingCol, setAddingCol] = useState(false)
+
     useEffect(() => {
-        axios.get('/api/candidates')
-            .then(r => setCandidates(r.data))
-            .catch(() => { })
-            .finally(() => setLoading(false))
+        Promise.all([
+            axios.get('/api/candidates'),
+            axios.get('/api/columns')
+        ]).then(([candRes, colRes]) => {
+            setCandidates(candRes.data)
+            setColumns([...colRes.data.base, ...colRes.data.custom])
+        }).catch(() => { })
+        .finally(() => setLoading(false))
     }, [])
+
+    const handleAddColumn = async () => {
+        if (!newColLabel || !newColDesc) return;
+        setAddingCol(true);
+        try {
+            const res = await axios.post('/api/columns', {
+                col_key: newColLabel,
+                col_label: newColLabel,
+                description: newColDesc
+            });
+            const cols = await axios.get('/api/columns');
+            setColumns([...cols.data.base, ...cols.data.custom]);
+            setShowAddCol(false);
+            setNewColLabel('');
+            setNewColDesc('');
+        } catch (e) {
+            alert('Failed to add column: ' + (e.response?.data?.detail || e.message));
+        } finally {
+            setAddingCol(false);
+        }
+    }
 
     const totalCandidates = candidates.length
     const immediate = candidates.filter(c =>
@@ -160,41 +191,40 @@ export default function DashboardPage() {
                         </div>
                     </div>
 
-                    {/* Summary Table — fixed layout, fits screen, no scroll */}
-                    <div className="card" ref={summaryRef}>
-                        <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                    {/* Summary Table — responsive layout */}
+                    <div className="card" ref={summaryRef} style={{ overflowX: 'auto' }}>
+                        <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: '800px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 👥 {filterType === 'immediate' ? 'Immediate Joiners' : 'Candidate Summary'}
                             </div>
-                            <button
-                                className="btn btn-secondary"
-                                style={{ fontSize: '0.75rem', padding: '6px 12px', gap: 6 }}
-                                onClick={() => exportToExcel(formatCandidatesForExcel(filteredCandidates), 'hire_ai_candidates.xlsx')}
-                            >
-                                <Download size={14} /> Download Excel
-                            </button>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <button
+                                    className="btn btn-primary"
+                                    style={{ fontSize: '0.75rem', padding: '6px 12px', gap: 6 }}
+                                    onClick={() => setShowAddCol(true)}
+                                >
+                                    <Plus size={14} /> Add Custom Column
+                                </button>
+                                <button
+                                    className="btn btn-secondary"
+                                    style={{ fontSize: '0.75rem', padding: '6px 12px', gap: 6 }}
+                                    onClick={() => exportToExcel(formatCandidatesForExcel(filteredCandidates, columns), 'hire_ai_candidates.xlsx')}
+                                >
+                                    <Download size={14} /> Download Excel
+                                </button>
+                            </div>
                         </div>
-                        <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-                            <colgroup>
-                                <col style={{ width: '14%' }} />
-                                <col style={{ width: '8%' }} />
-                                <col style={{ width: '8%' }} />
-                                <col style={{ width: '22%' }} />
-                                <col style={{ width: '7%' }} />
-                                <col style={{ width: '10%' }} />
-                                <col style={{ width: '15%' }} />
-                                <col style={{ width: '16%' }} />
-                            </colgroup>
+                        <table style={{ minWidth: '1000px', width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                             <thead>
                                 <tr style={{ background: 'rgba(2,48,71,0.9)' }}>
-                                    {['Name', 'Total Exp', 'Pega Exp', 'Skills', 'CTC', 'Notice Period', 'Organization', 'Email'].map(h => (
-                                        <th key={h} style={{
+                                    {columns.map(h => (
+                                        <th key={h.col_key} style={{
                                             padding: '11px 12px', textAlign: 'left',
                                             fontFamily: 'var(--fh)', fontWeight: 700, fontSize: '0.78rem',
                                             color: 'var(--gold)', textTransform: 'uppercase', letterSpacing: '0.04rem',
                                             borderBottom: '1px solid var(--border)'
                                         }}>
-                                            {h}
+                                            {h.col_label}
                                         </th>
                                     ))}
                                 </tr>
@@ -205,53 +235,80 @@ export default function DashboardPage() {
                                         borderBottom: '1px solid rgba(33,158,188,0.1)',
                                         background: i % 2 === 0 ? 'rgba(2,48,71,0.2)' : 'transparent'
                                     }}>
-                                        <td style={{
-                                            padding: '10px 12px', color: 'var(--gold)', fontWeight: 600,
-                                            wordBreak: 'break-word', verticalAlign: 'top'
-                                        }}>
-                                            <a
-                                                href={`/static/${c.filename}`}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                style={{ color: 'inherit', textDecoration: 'none', borderBottom: '1px dashed transparent', transition: 'all 0.2s' }}
-                                                onMouseEnter={e => e.currentTarget.style.borderBottomColor = 'var(--gold)'}
-                                                onMouseLeave={e => e.currentTarget.style.borderBottomColor = 'transparent'}
-                                                title={`Download ${c.filename}`}
-                                            >
-                                                {c.full_name || '—'}
-                                            </a>
-                                        </td>
-                                        <td style={{ padding: '10px 12px', textAlign: 'center', verticalAlign: 'top' }}>
-                                            {c.total_experience ? `${c.total_experience} yrs` : '—'}
-                                        </td>
-                                        <td style={{ padding: '10px 12px', textAlign: 'center', verticalAlign: 'top' }}>
-                                            {c.pega_experience ? `${c.pega_experience} yrs` : '—'}
-                                        </td>
-                                        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
-                                            <SkillBadges skills={c.skills} />
-                                        </td>
-                                        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>{c.ctc || '—'}</td>
-                                        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
-                                            <span className={`badge ${(c.notice_period || '').toLowerCase().includes('immediate')
-                                                ? 'badge-green' : 'badge-sky'}`}>
-                                                {c.notice_period || '—'}
-                                            </span>
-                                        </td>
-                                        <td style={{ padding: '10px 12px', wordBreak: 'break-word', verticalAlign: 'top' }}>
-                                            {c.current_organization || '—'}
-                                        </td>
-                                        <td style={{
-                                            padding: '10px 12px', color: 'var(--sky-dim)',
-                                            wordBreak: 'break-all', fontSize: '0.8rem', verticalAlign: 'top'
-                                        }}>
-                                            {c.email || '—'}
-                                        </td>
+                                        {columns.map(col => {
+                                            if (col.col_key === 'full_name') {
+                                                return <td style={{ padding: '10px 12px', color: 'var(--gold)', fontWeight: 600, wordBreak: 'break-word', verticalAlign: 'top' }} key={col.col_key}>
+                                                    <a href={`/static/${c.filename}`} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', borderBottom: '1px dashed transparent', transition: 'all 0.2s' }} onMouseEnter={e => e.currentTarget.style.borderBottomColor = 'var(--gold)'} onMouseLeave={e => e.currentTarget.style.borderBottomColor = 'transparent'} title={`Download ${c.filename}`}>
+                                                        {c.full_name || '—'}
+                                                    </a>
+                                                </td>
+                                            }
+                                            if (col.col_key === 'skills') {
+                                                return <td key={col.col_key} style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+                                                    <SkillBadges skills={c.skills} />
+                                                </td>
+                                            }
+                                            if (col.col_key === 'notice_period') {
+                                                return <td key={col.col_key} style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+                                                    <span className={`badge ${(c.notice_period || '').toLowerCase().includes('immediate') ? 'badge-green' : 'badge-sky'}`}>
+                                                        {c.notice_period || '—'}
+                                                    </span>
+                                                </td>
+                                            }
+                                            if (col.col_key === 'total_experience' || col.col_key === 'pega_experience') {
+                                                return <td key={col.col_key} style={{ padding: '10px 12px', textAlign: 'center', verticalAlign: 'top' }}>
+                                                    {c[col.col_key] ? `${c[col.col_key]} yrs` : '—'}
+                                                </td>
+                                            }
+                                            return <td key={col.col_key} style={{ padding: '10px 12px', verticalAlign: 'top', color: col.col_key === 'email' ? 'var(--sky-dim)' : 'inherit', wordBreak: col.col_key === 'email' ? 'break-all' : 'break-word' }}>
+                                                {c[col.col_key] || '—'}
+                                            </td>
+                                        })}
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
                 </>
+            )}
+
+            {/* Add Column Modal */}
+            {showAddCol && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', 
+                    background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', 
+                    justifyContent: 'center', zIndex: 1000
+                }}>
+                    <div className="card" style={{ width: '400px', padding: '2rem' }}>
+                        <h3 style={{ color: 'var(--gold)', marginBottom: '1.5rem', fontFamily: 'var(--fh)' }}>Add Custom Column</h3>
+                        <div style={{ marginBottom: '1rem' }}>
+                            <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--sky-dim)', marginBottom: '6px' }}>Column Label</label>
+                            <input 
+                                type="text" 
+                                value={newColLabel} 
+                                onChange={e => setNewColLabel(e.target.value)} 
+                                placeholder="e.g. Github Profile" 
+                                style={{ width: '100%', padding: '10px', background: 'rgba(1,22,39,0.8)', border: '1px solid var(--border)', color: '#fff', borderRadius: 6 }}
+                            />
+                        </div>
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--sky-dim)', marginBottom: '6px' }}>AI Extraction Prompt</label>
+                            <textarea 
+                                value={newColDesc} 
+                                onChange={e => setNewColDesc(e.target.value)} 
+                                placeholder="e.g. Extract the candidate's Github URL. Leave empty if none." 
+                                rows={3}
+                                style={{ width: '100%', padding: '10px', background: 'rgba(1,22,39,0.8)', border: '1px solid var(--border)', color: '#fff', borderRadius: 6, resize: 'vertical' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                            <button className="btn btn-secondary" onClick={() => setShowAddCol(false)}>Cancel</button>
+                            <button className="btn btn-primary" onClick={handleAddColumn} disabled={addingCol || !newColLabel || !newColDesc}>
+                                {addingCol ? 'Adding...' : 'Add Column'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     )

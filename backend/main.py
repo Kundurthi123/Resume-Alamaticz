@@ -8,7 +8,7 @@ from typing import Optional
 from datetime import datetime
 
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -83,6 +83,14 @@ def init_db():
             timestamp            DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS custom_columns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            col_key TEXT UNIQUE,
+            col_label TEXT,
+            description TEXT
+        )
+    ''')
     # Migration: add missing columns
     cur.execute("PRAGMA table_info(candidate_metadata)")
     existing = [c[1] for c in cur.fetchall()]
@@ -106,17 +114,21 @@ def get_candidates_df() -> pd.DataFrame:
 def log_candidate(data: dict):
     conn = sqlite3.connect(STATS_DB)
     cur  = conn.cursor()
-    cols = [
-        'filename', 'full_name', 'total_experience', 'pega_experience',
-        'skills', 'certifications', 'ctc', 'notice_period',
-        'current_organization', 'email', 'phone', 'linkedin'
-    ]
+    
+    cur.execute("PRAGMA table_info(candidate_metadata)")
+    existing_cols = {c[1] for c in cur.fetchall()}
+    
+    # Filter data to only valid columns
+    cols = [c for c in data.keys() if c in existing_cols and c != 'id']
     vals = [str(data.get(c, '')) if data.get(c) is not None else '' for c in cols]
+    
     cur.execute("DELETE FROM candidate_metadata WHERE filename = ?", (data.get('filename', ''),))
-    cur.execute(
-        f"INSERT INTO candidate_metadata ({','.join(cols)}) VALUES ({','.join(['?']*len(cols))})",
-        vals
-    )
+    
+    if cols:
+        cur.execute(
+            f"INSERT INTO candidate_metadata ({','.join(cols)}) VALUES ({','.join(['?']*len(cols))})",
+            vals
+        )
     conn.commit()
     conn.close()
 
@@ -140,24 +152,83 @@ def list_candidates():
     df = df.fillna("")
     return df.to_dict(orient="records")
 
-class CandidateUpdate(BaseModel):
-    full_name:            Optional[str] = None
-    total_experience:     Optional[float] = None
-    pega_experience:      Optional[float] = None
-    skills:               Optional[str] = None
-    certifications:       Optional[str] = None
-    ctc:                  Optional[str] = None
-    notice_period:        Optional[str] = None
-    current_organization: Optional[str] = None
-    email:                Optional[str] = None
-    phone:                Optional[str] = None
-    linkedin:             Optional[str] = None
+class CustomColumn(BaseModel):
+    col_key: str
+    col_label: str
+    description: str
+
+@app.post("/api/columns")
+def add_column(col: CustomColumn):
+    conn = sqlite3.connect(STATS_DB)
+    cur = conn.cursor()
+    clean_key = re.sub(r'[^a-zA-Z0-9_]', '', col.col_key.replace(' ', '_')).lower()
+    
+    cur.execute("PRAGMA table_info(candidate_metadata)")
+    existing = [c[1] for c in cur.fetchall()]
+    if clean_key in existing:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Column already exists")
+        
+    try:
+        cur.execute(f"ALTER TABLE candidate_metadata ADD COLUMN {clean_key} TEXT")
+        cur.execute("INSERT INTO custom_columns (col_key, col_label, description) VALUES (?, ?, ?)", 
+                    (clean_key, col.col_label, col.description))
+        conn.commit()
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=str(e))
+    conn.close()
+    return {"status": "added", "col_key": clean_key}
+
+@app.get("/api/columns")
+def get_columns():
+    conn = sqlite3.connect(STATS_DB)
+    cur = conn.cursor()
+    cur.execute("SELECT col_key, col_label FROM custom_columns")
+    customs = [{"col_key": row[0], "col_label": row[1]} for row in cur.fetchall()]
+    conn.close()
+    
+    base_cols = [
+        {"col_key": "full_name", "col_label": "Name"},
+        {"col_key": "total_experience", "col_label": "Total Exp"},
+        {"col_key": "pega_experience", "col_label": "Pega Exp"},
+        {"col_key": "skills", "col_label": "Skills"},
+        {"col_key": "certifications", "col_label": "Certifications"},
+        {"col_key": "ctc", "col_label": "CTC"},
+        {"col_key": "notice_period", "col_label": "Notice Period"},
+        {"col_key": "current_organization", "col_label": "Organization"},
+        {"col_key": "email", "col_label": "Email"},
+        {"col_key": "phone", "col_label": "Phone"},
+        {"col_key": "linkedin", "col_label": "LinkedIn"}
+    ]
+    return {"base": base_cols, "custom": customs}
+
+@app.delete("/api/columns/{col_key}")
+def delete_column(col_key: str):
+    conn = sqlite3.connect(STATS_DB)
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM custom_columns WHERE col_key=?", (col_key,))
+        try:
+            cur.execute(f"ALTER TABLE candidate_metadata DROP COLUMN {col_key}")
+        except Exception:
+            pass # older sqlite versions might not support drop column
+        conn.commit()
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=str(e))
+    conn.close()
+    return {"status": "deleted"}
 
 @app.put("/api/candidates/{candidate_id}")
-def update_candidate(candidate_id: int, body: CandidateUpdate):
+async def update_candidate(candidate_id: int, request: Request):
+    body = await request.json()
     conn = sqlite3.connect(STATS_DB)
     cur  = conn.cursor()
-    updates = {k: v for k, v in body.dict().items() if v is not None}
+    cur.execute("PRAGMA table_info(candidate_metadata)")
+    allowed_cols = [c[1] for c in cur.fetchall()]
+    updates = {k: v for k, v in body.items() if k in allowed_cols and k != 'id' and v is not None}
+    
     if not updates:
         conn.close()
         return {"status": "no changes"}
@@ -196,7 +267,7 @@ Return ONLY a valid JSON object with these exact keys (no extra text, no markdow
   "current_organization": "<Current or most recent employer name>",
   "email": "<Email address>",
   "phone": "<Phone number with country code if available>",
-  "linkedin": "<Full LinkedIn profile URL if found, else empty string>"
+  "linkedin": "<Full LinkedIn profile URL if found, else empty string>"{custom_fields}
 }}
 
 Rules:
@@ -237,7 +308,20 @@ async def upload_resume(file: UploadFile = File(...)):
 
     # LLM extraction
     try:
-        resp = llm.invoke([HumanMessage(content=EXTRACT_PROMPT.format(text=text[:7000]))])
+        # Fetch custom columns for the prompt
+        conn = sqlite3.connect(STATS_DB)
+        cur = conn.cursor()
+        cur.execute("SELECT col_key, description FROM custom_columns")
+        custom_cols = cur.fetchall()
+        conn.close()
+        
+        custom_fields_str = ""
+        if custom_cols:
+            for col_key, desc in custom_cols:
+                custom_fields_str += f',\n  "{col_key}": "<{desc}>"'
+                
+        prompt_str = EXTRACT_PROMPT.format(text=text[:7000], custom_fields=custom_fields_str)
+        resp = llm.invoke([HumanMessage(content=prompt_str)])
         raw  = resp.content.strip()
 
         if "```json" in raw:
@@ -443,3 +527,4 @@ def reset_all():
     except Exception:
         pass
     return {"status": "reset complete"}
+

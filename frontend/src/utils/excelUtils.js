@@ -26,20 +26,34 @@ export const exportToExcel = (data, filename = 'candidates.xlsx', sheetName = 'C
  * @param {Array} candidates - Raw candidate objects from API
  * @returns {Array} - Formatted objects for Excel
  */
-export const formatCandidatesForExcel = (candidates) => {
-    return candidates.map(c => ({
-        'Full Name': c.full_name || '—',
-        'Total Experience (yrs)': c.total_experience || 0,
-        'Pega Experience (yrs)': c.pega_experience || 0,
-        'Skills': c.skills || '—',
-        'Certifications': c.certifications || '—',
-        'CTC': c.ctc || '—',
-        'Notice Period': c.notice_period || '—',
-        'Current Organization': c.current_organization || '—',
-        'Email': c.email || '—',
-        'Phone': c.phone || '—',
-        'LinkedIn': c.linkedin || '—',
-        'Filename': c.filename || '—',
-        'Analyzed At': c.timestamp ? new Date(c.timestamp).toLocaleString() : '—'
-    }));
+export const formatCandidatesForExcel = (candidates, columns = []) => {
+    return candidates.map(c => {
+        const row = {};
+        
+        if (columns && columns.length > 0) {
+            // Use dynamic columns provided from API
+            columns.forEach(col => {
+                row[col.col_label] = c[col.col_key] || (col.col_key === 'pega_experience' || col.col_key === 'total_experience' ? 0 : '—');
+            });
+            row['Filename'] = c.filename || '—';
+            row['Analyzed At'] = c.timestamp ? new Date(c.timestamp).toLocaleString() : '—';
+        } else {
+            // Fallback to static if no dynamic columns
+            row['Full Name'] = c.full_name || '—';
+            row['Total Experience (yrs)'] = c.total_experience || 0;
+            row['Pega Experience (yrs)'] = c.pega_experience || 0;
+            row['Skills'] = c.skills || '—';
+            row['Certifications'] = c.certifications || '—';
+            row['CTC'] = c.ctc || '—';
+            row['Notice Period'] = c.notice_period || '—';
+            row['Current Organization'] = c.current_organization || '—';
+            row['Email'] = c.email || '—';
+            row['Phone'] = c.phone || '—';
+            row['LinkedIn'] = c.linkedin || '—';
+            row['Filename'] = c.filename || '—';
+            row['Analyzed At'] = c.timestamp ? new Date(c.timestamp).toLocaleString() : '—';
+        }
+        
+        return row;
+    });
 };

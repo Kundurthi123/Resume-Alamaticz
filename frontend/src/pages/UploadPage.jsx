@@ -129,19 +129,11 @@ function ExpandableCell({ value, onEdit }) {
 }
 
 /* ─── Column config ───────────────────────────────────────────────────────── */
-const COLS = [
-    { key: 'full_name', label: 'Name', pct: '12%' },
-    { key: 'total_experience', label: 'Total\u00A0Exp', pct: '7%' },
-    { key: 'pega_experience', label: 'Pega\u00A0Exp', pct: '7%' },
-    { key: 'skills', label: 'Skills', pct: '13%' },
-    { key: 'certifications', label: 'Certifications', pct: '12%' },
-    { key: 'ctc', label: 'CTC', pct: '6%' },
-    { key: 'notice_period', label: 'Notice', pct: '7%' },
-    { key: 'current_organization', label: 'Company', pct: '11%' },
-    { key: 'email', label: 'Email', pct: '13%' },
-    { key: 'phone', label: 'Phone', pct: '8%' },
-    { key: '_del', label: '', pct: '4%' },
-]
+const BASE_WIDTHS = {
+    full_name: '12%', total_experience: '7%', pega_experience: '7%',
+    skills: '13%', certifications: '12%', ctc: '6%', notice_period: '7%',
+    current_organization: '11%', email: '13%', phone: '8%', linkedin: '8%'
+}
 
 const TH = {
     padding: '11px 10px',
@@ -168,10 +160,40 @@ export default function UploadPage() {
     const [toast, setToast] = useState(null)
     const [editCell, setEditCell] = useState(null)
     const [editVal, setEditVal] = useState('')
+    const [cols, setCols] = useState([])
+    const [showAddCol, setShowAddCol] = useState(false)
+    const [newColForm, setNewColForm] = useState({ label: '', desc: '' })
 
     const showToast = (msg, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500) }
     const load = () => axios.get('/api/candidates').then(r => setCandidates(r.data)).catch(() => { })
-    useEffect(() => { load() }, [])
+    const loadCols = () => axios.get('/api/columns').then(r => {
+        const base = (r.data.base || []).map(c => ({ key: c.col_key, label: c.col_label, pct: BASE_WIDTHS[c.col_key] || '10%', col_key: c.col_key, col_label: c.col_label }))
+        const custom = (r.data.custom || []).map(c => ({ key: c.col_key, label: c.col_label, pct: '10%', col_key: c.col_key, col_label: c.col_label, isCustom: true }))
+        setCols([...base, ...custom, { key: '_del', label: '', pct: '4%' }])
+    }).catch(() => { })
+
+    useEffect(() => { load(); loadCols() }, [])
+
+    const handleDeleteCol = async (col_key) => {
+        if (!window.confirm('Delete this custom column?')) return
+        try {
+            await axios.delete(`/api/columns/${col_key}`)
+            showToast('Column deleted')
+            loadCols()
+        } catch (e) { showToast(e.response?.data?.detail || 'Delete failed', 'error') }
+    }
+
+    const handleAddCol = async () => {
+        if (!newColForm.label || !newColForm.desc) return showToast('Please fill all fields', 'error')
+        try {
+            const col_key = newColForm.label.replace(/[^a-zA-Z0-9_]/g, '').replace(/\s+/g, '_').toLowerCase()
+            await axios.post('/api/columns', { col_key, col_label: newColForm.label, description: newColForm.desc })
+            setShowAddCol(false)
+            setNewColForm({ label: '', desc: '' })
+            loadCols()
+            showToast('Column added!')
+        } catch (e) { showToast(e.response?.data?.detail || 'Add failed', 'error') }
+    }
 
     const onDrop = useCallback(async (files) => {
         if (!files.length) return
@@ -252,14 +274,17 @@ export default function UploadPage() {
                 <div className="section-header">
                     <div className="section-title">👥 Candidate Details</div>
                     <div style={{ display: 'flex', gap: 10 }}>
+                        <button className="btn btn-secondary" onClick={() => setShowAddCol(true)} style={{ gap: 6, color: 'var(--gold)', borderColor: 'rgba(255,183,3,0.3)' }}>
+                            <span style={{ fontWeight: 900 }}>+</span> Add Column
+                        </button>
                         <button
                             className="btn btn-secondary"
                             style={{ gap: 6 }}
-                            onClick={() => exportToExcel(formatCandidatesForExcel(candidates), 'all_candidates_details.xlsx')}
+                            onClick={() => exportToExcel(formatCandidatesForExcel(candidates, cols.filter(c => c.key !== '_del')), 'all_candidates_details.xlsx')}
                         >
                             <Download size={14} /> Download Excel
                         </button>
-                        <button className="btn btn-secondary" onClick={load} style={{ gap: 6 }}>
+                        <button className="btn btn-secondary" onClick={() => { load(); loadCols(); }} style={{ gap: 6 }}>
                             <RefreshCw size={14} /> Refresh
                         </button>
                     </div>
@@ -273,13 +298,28 @@ export default function UploadPage() {
                 ) : (
                     <>
                         <div style={{ overflowX: 'auto', borderRadius: 10, border: '1px solid var(--border)' }}>
-                            <table style={{ width: '100%', minWidth: 860, tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '0.83rem' }}>
+                            <table style={{ width: '100%', minWidth: Math.max(860, cols.length * 80), tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '0.83rem' }}>
                                 <colgroup>
-                                    {COLS.map(c => <col key={c.key} style={{ width: c.pct }} />)}
+                                    {cols.map(c => <col key={c.key} style={{ width: c.pct }} />)}
                                 </colgroup>
                                 <thead>
                                     <tr>
-                                        {COLS.map(c => <th key={c.key} style={TH} title={c.label}>{c.label}</th>)}
+                                        {cols.map(c => (
+                                            <th key={c.key} style={TH} title={c.label}>
+                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.label}</span>
+                                                    {c.isCustom && (
+                                                        <button
+                                                            onClick={() => handleDeleteCol(c.key)}
+                                                            style={{ background: 'none', border: 'none', color: '#ef233c', cursor: 'pointer', padding: 0, marginLeft: 5, display: 'flex' }}
+                                                            title="Delete Column"
+                                                        >
+                                                            <Trash2 size={12} />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </th>
+                                        ))}
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -289,7 +329,7 @@ export default function UploadPage() {
                                             onMouseEnter={e => e.currentTarget.style.background = 'rgba(33,158,188,0.07)'}
                                             onMouseLeave={e => e.currentTarget.style.background = ri % 2 === 0 ? 'rgba(2,48,71,0.25)' : 'transparent'}
                                         >
-                                            {COLS.map(({ key }) => {
+                                            {cols.map(({ key }) => {
                                                 /* ── Delete button ── */
                                                 if (key === '_del') return (
                                                     <td key={key} style={{ ...TD_BASE, textAlign: 'center' }}>
@@ -371,6 +411,43 @@ export default function UploadPage() {
             {toast && (
                 <div className="toast-container">
                     <div className={`toast ${toast.type}`}>{toast.msg}</div>
+                </div>
+            )}
+
+            {showAddCol && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.7)', zIndex: 99999,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}>
+                    <div className="card" style={{ width: 400, maxWidth: '90%' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 15 }}>
+                            <h3 style={{ margin: 0, color: 'var(--gold)', fontFamily: 'var(--fh)' }}>Add Custom Column</h3>
+                            <button onClick={() => setShowAddCol(false)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}><X size={18} /></button>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: 5, fontSize: '0.8rem', color: 'var(--sky-dim)' }}>Column Name / Label</label>
+                                <input
+                                    autoFocus
+                                    value={newColForm.label} onChange={e => setNewColForm(p => ({ ...p, label: e.target.value }))}
+                                    placeholder="e.g. Current Location"
+                                    style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'rgba(1,22,39,0.5)', color: '#fff', outline: 'none' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: 5, fontSize: '0.8rem', color: 'var(--sky-dim)' }}>Description / AI Instructions</label>
+                                <textarea
+                                    value={newColForm.desc} onChange={e => setNewColForm(p => ({ ...p, desc: e.target.value }))}
+                                    placeholder="e.g. City and State where candidate is located"
+                                    style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'rgba(1,22,39,0.5)', color: '#fff', minHeight: 80, resize: 'vertical', outline: 'none' }}
+                                />
+                            </div>
+                            <button className="btn" onClick={handleAddCol} style={{ background: 'var(--gradient-gold)', color: '#000', fontWeight: 'bold' }}>
+                                Create Column
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
