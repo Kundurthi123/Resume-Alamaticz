@@ -21,8 +21,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
-from langchain.chains import RetrievalQA
 from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -514,8 +515,7 @@ Respond with ONLY the MATCH_RESULT line, nothing else."""
     try:
         db        = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
         retriever = db.as_retriever(search_kwargs={"k": 6})
-        qa_prompt = PromptTemplate(
-            template="""You are Hire AI, an expert HR recruitment assistant.
+        qa_prompt = PromptTemplate.from_template("""You are Hire AI, an expert HR recruitment assistant.
 Answer using ONLY the resume context below. Be specific and structured.
 
 Resume Context:
@@ -523,14 +523,18 @@ Resume Context:
 
 HR Question: {question}
 
-Answer:""",
-            input_variables=["context", "question"]
+Answer:""")
+
+        def format_docs(docs):
+            return "\n\n".join(d.page_content for d in docs)
+
+        rag_chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | qa_prompt
+            | llm
+            | StrOutputParser()
         )
-        qa  = RetrievalQA.from_chain_type(
-            llm=llm, chain_type="stuff", retriever=retriever,
-            chain_type_kwargs={"prompt": qa_prompt}
-        )
-        ans = qa.invoke(prompt)['result']
+        ans = rag_chain.invoke(prompt)
         return {"type": "text", "answer": ans}
     except Exception as e:
         return {"type": "text", "answer": f"Search error: {e}"}
