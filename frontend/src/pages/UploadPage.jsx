@@ -163,6 +163,7 @@ export default function UploadPage() {
     const [cols, setCols] = useState([])
     const [showAddCol, setShowAddCol] = useState(false)
     const [newColForm, setNewColForm] = useState({ label: '', desc: '' })
+    const [viewingPdf, setViewingPdf] = useState(null)
 
     const showToast = (msg, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500) }
     const load = () => axios.get('/api/candidates').then(r => setCandidates(r.data)).catch(() => { })
@@ -381,17 +382,15 @@ export default function UploadPage() {
                                                         cursor: 'text',
                                                     }}>
                                                         {key === 'full_name' && row.filename ? (
-                                                            <a
-                                                                href={`/static/${row.filename}`}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                style={{ color: 'inherit', textDecoration: 'none', borderBottom: '1px dashed transparent', transition: 'all 0.2s' }}
+                                                            <span
+                                                                onClick={() => setViewingPdf({ url: `/static/${row.filename}`, name: row.full_name })}
+                                                                style={{ color: 'inherit', textDecoration: 'none', borderBottom: '1px dashed transparent', transition: 'all 0.2s', cursor: 'pointer' }}
                                                                 onMouseEnter={e => e.currentTarget.style.borderBottomColor = 'var(--gold)'}
                                                                 onMouseLeave={e => e.currentTarget.style.borderBottomColor = 'transparent'}
-                                                                title={`Download ${row.filename}`}
+                                                                title={`View ${row.filename}`}
                                                             >
                                                                 {String(display)}
-                                                            </a>
+                                                            </span>
                                                         ) : String(display)}
                                                     </td>
                                                 )
@@ -447,6 +446,47 @@ export default function UploadPage() {
                                 Create Column
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Resume Viewer Modal */}
+            {viewingPdf && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    background: 'rgba(0,0,0,0.85)', zIndex: 99999,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    backdropFilter: 'blur(5px)'
+                }} onClick={() => setViewingPdf(null)}>
+                    <div className="card" onClick={e => e.stopPropagation()} style={{ 
+                        width: '90%', maxWidth: 1000, height: '90vh', 
+                        display: 'flex', flexDirection: 'column', padding: 0, 
+                        overflow: 'hidden', border: '1px solid var(--border)',
+                        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
+                    }}>
+                        <div style={{ 
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+                            padding: '16px 24px', background: 'rgba(2,48,71,0.98)', borderBottom: '1px solid var(--border)' 
+                        }}>
+                            <h3 style={{ margin: 0, color: 'var(--gold)', fontFamily: 'var(--fh)', display: 'flex', alignItems: 'center', gap: 10, fontSize: '1.05rem' }}>
+                                <span style={{fontSize: '1.2rem', opacity: 0.8}}>📄</span> {viewingPdf.name}
+                            </h3>
+                            <button onClick={() => setViewingPdf(null)} style={{ 
+                                background: 'rgba(255,183,3,0.1)', border: '1px solid rgba(255,183,3,0.3)', 
+                                color: 'var(--gold)', cursor: 'pointer', padding: 6, borderRadius: '8px', 
+                                display: 'flex', transition: 'all 0.2s' 
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,183,3,0.2)'}
+                            onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,183,3,0.1)'}
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <iframe 
+                            src={`${viewingPdf.url}#view=FitH`} 
+                            style={{ width: '100%', flex: 1, border: 'none', background: '#525659' }} 
+                            title="Resume Viewer"
+                        />
                     </div>
                 </div>
             )}
